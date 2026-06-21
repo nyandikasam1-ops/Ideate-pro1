@@ -1,0 +1,93 @@
+// netlify/functions/enhance.js
+//
+// This function runs on Netlify's servers, NOT in the browser.
+// It holds your GROQ_API_KEY secret and forwards requests to Groq.
+// The frontend calls THIS function instead of calling Groq directly.
+
+exports.handler = async function (event) {
+  // Only allow POST
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ error: "Method not allowed" }),
+    };
+  }
+
+  const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+  if (!GROQ_API_KEY) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        error: "Server is missing GROQ_API_KEY. Set it in Netlify env vars.",
+      }),
+    };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(event.body);
+  } catch (e) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Invalid JSON body" }),
+    };
+  }
+
+  const { systemPrompt, userInput } = payload;
+
+  if (!userInput || typeof userInput !== "string") {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Missing userInput" }),
+    };
+  }
+
+  try {
+    const groqResponse = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          // llama-3.3-70b-versatile is Groq's strongest general model as of writing.
+          // Swap to "llama-3.1-8b-instant" for even faster/cheaper if quality is sufficient.
+          model: "llama-3.3-70b-versatile",
+          max_tokens: 1000,
+          temperature: 0.7,
+          messages: [
+            { role: "system", content: systemPrompt || "" },
+            { role: "user", content: userInput },
+          ],
+        }),
+      }
+    );
+
+    const data = await groqResponse.json();
+
+    if (!groqResponse.ok) {
+      return {
+        statusCode: groqResponse.status,
+        body: JSON.stringify({
+          error: data.error?.message || "Groq API error",
+        }),
+      };
+    }
+
+    const text = data.choices?.[0]?.message?.content || "";
+
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    };
+  } catch (err) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Failed to reach Groq: " + err.message }),
+    };
+  }
+};
